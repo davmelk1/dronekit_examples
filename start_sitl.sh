@@ -37,7 +37,7 @@ else
     GZ_FLAGS="-s -r -v1"
     MAVPROXY_EXTRA="--daemon"
 fi
-
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia gz sim $GZ_FLAGS iris_runway.sdf &
 gz sim $GZ_FLAGS iris_runway.sdf &
 GZ_PID=$!
 trap 'kill $GZ_PID 2>/dev/null' EXIT
