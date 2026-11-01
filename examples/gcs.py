@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QLabel, QMessageBox, QGridLayout, QHBoxLayout
 )
 from PyQt5.QtCore import QRunnable, QThreadPool, QTimer
+from PyQt5.QtCore import Qt
 class Worker(QRunnable):
     def __init__(self, fn):
         super().__init__()
@@ -25,14 +26,30 @@ from dronekit import VehicleMode, connect
 class GCS(QWidget):
     def __init__(self, parent=None):
         super().__init__()
+
+        self.setFocusPolicy(Qt.StrongFocus)
+
         self.thread_pool = QThreadPool.globalInstance()
         self.connection_timer = QTimer(self)
         self.connection_timer.timeout.connect(self.check_connection)
-        self.connection_timer.start(1000)
+        self.connection_timer.start(100)
+
+        self.control_timer = QTimer(self)
+        self.control_timer.timeout.connect(self.update_rc)
+        self.control_timer.start(50)  # 20 Hz
+
+        self.pressed_keys = set()
+        self.rc = {
+            1: 1500,  # Roll
+            2: 1500,  # Pitch
+            3: 1000,  # Throttle
+            4: 1500,  # Yaw
+        }
 
         self.vehicle = None
+        self.is_called = False
         self.setWindowTitle("Ground control station")
-        self.resize(300, 150)
+        self.resize(500, 150)
         self.connection_dst = QLineEdit("127.0.0.1:14550")
         self.connect_button = QPushButton("Connect")
         self.disconnect_button = QPushButton("Disconnect")
@@ -79,14 +96,23 @@ class GCS(QWidget):
         self.status_label = QLabel("Disconnected")
         main_layout.addWidget(self.status_label, 4, 0)
 
+        # self.run_async(self.connect_drone)
+
+
     def run_async(self, fn):
         self.thread_pool.start(Worker(fn))
 
     def connect_drone(self):
+        self.is_called = True
+        self.connect_button.setDisabled(True)
+        self.connection_dst.setDisabled(True)
         print(f"connecting to drone at {self.connection_dst.text()}")
         self.vehicle = connect(self.connection_dst.text(), wait_ready=True)
         if self.vehicle:
             print("Connected")
+            self.vehicle.add_attribute_listener('armed', self.armed_callback)
+        self.is_called = False
+
 
     def disconnect_drone(self):
         if self.vehicle is None:
@@ -96,11 +122,13 @@ class GCS(QWidget):
         self.vehicle = None
 
     def check_connection(self):
-        if self.vehicle is not None and self.vehicle.last_heartbeat < 3:
+        if (self.vehicle is not None and self.vehicle.last_heartbeat < 3) or self.is_called:
             self.disconnect_button.setEnabled(True)
             self.connect_button.setDisabled(True)
             self.connection_dst.setDisabled(True)
-            self.status_label.setText(f"Connected | mode: {self.vehicle.mode.name} | altitude: {self.vehicle.location.global_relative_frame.alt}")
+            if self.vehicle:
+                self.status_label.setText(f"Connected | mode: {self.vehicle.mode.name} | altitude: {self.vehicle.location.global_relative_frame.alt}\n"
+                                      f"{self.vehicle.channels.overrides}".replace("'1'",'r').replace("'2'",'p').replace("'3'",'t').replace("'4'",'y'))
         else:
             self.connect_button.setEnabled(True)
             self.connection_dst.setEnabled(True)
@@ -108,7 +136,10 @@ class GCS(QWidget):
             self.status_label.setText("Disconnected")
             return
 
-        if self.vehicle.armed:
+
+
+    def armed_callback(self, vehicle, attribute_name, value):
+        if value:
             self.arm_button.setText("Disarm")
         else:
             self.arm_button.setText("Arm")
@@ -123,14 +154,7 @@ class GCS(QWidget):
     def arm_drone(self):
         if self.vehicle is None:
             return
-        if self.vehicle.armed:
-            self.arm_button.setText("Arm")
-            print("Disarming drone")
-            self.vehicle.armed = False
-        else:
-            self.arm_button.setText("Disarm")
-            print("Arming drone")
-            self.vehicle.armed = True
+        self.vehicle.armed = not self.vehicle.armed
 
     def arm_and_takeoff(self):
         if not self.vehicle.armed:
@@ -153,6 +177,65 @@ class GCS(QWidget):
                 print("Reached target altitude")
                 break
             time.sleep(1)
+
+    def keyPressEvent(self, event):
+        if not event.isAutoRepeat():
+            self.pressed_keys.add(event.key())
+
+    def keyReleaseEvent(self, event):
+        if not event.isAutoRepeat():
+            self.pressed_keys.discard(event.key())
+
+    def update_rc(self):
+        if not self.vehicle:
+            return
+
+        step = 50
+
+        # Roll
+        self.rc[1] = 1500
+        if Qt.Key_Left in self.pressed_keys:
+            self.rc[1] += step
+        if Qt.Key_Right in self.pressed_keys:
+            self.rc[1] -= step
+
+        # Pitch
+        self.rc[2] = 1500
+        if Qt.Key_Up in self.pressed_keys:
+            self.rc[2] += step
+        if Qt.Key_Down in self.pressed_keys:
+            self.rc[2] -= step
+
+        # Throttle
+        if Qt.Key_W in self.pressed_keys:
+            self.rc[3] = min(2000, self.rc[3] + 30)
+        elif Qt.Key_S in self.pressed_keys:
+            self.rc[3] = max(1000, self.rc[3] - 30)
+
+        # Yaw
+        self.rc[4] = 1500
+        if Qt.Key_A in self.pressed_keys:
+            self.rc[4] -= step
+        if Qt.Key_D in self.pressed_keys:
+            self.rc[4] += step
+
+        # Send RC overrides
+        self.vehicle.channels.overrides = {
+            str(ch): value for ch, value in self.rc.items()
+        }
+
+    def focusOutEvent(self, event):
+        if self.vehicle is None:
+            return
+        self.pressed_keys.clear()
+        self.rc[1] = 1500
+        self.rc[2] = 1500
+        self.rc[3] = 1000
+        self.rc[4] = 1500
+        self.vehicle.channels.overrides = {
+            str(ch): value for ch, value in self.rc.items()
+        }
+        # super().focusOutEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

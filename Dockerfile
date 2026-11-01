@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gz-harmonic rapidjson-dev libopencv-dev \
         libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
         libgl1-mesa-dri libglx-mesa0 mesa-utils x11-apps \
-        python3.9 python3.9-venv python3.9-dev python3.9-tk \
+        python3.9 python3.9-venv python3.9-dev python3.9-tk python3-pyqt5 \
     && rm -rf /var/lib/apt/lists/*
 
 # ArduPilot's build scripts refuse to run as root
@@ -41,7 +41,8 @@ ENV GZ_SIM_SYSTEM_PLUGIN_PATH=/home/ardupilot/ardupilot_gazebo/build:${GZ_SIM_SY
 # --- python 3.9 venv for MAVProxy + dronekit (dronekit is broken on py>=3.10) ---
 RUN python3.9 -m venv /home/ardupilot/venv \
     && /home/ardupilot/venv/bin/pip install --no-cache-dir -U pip wheel \
-    && /home/ardupilot/venv/bin/pip install --no-cache-dir pymavlink dronekit dronekit-sitl pexpect future empy==3.3.4
+    && /home/ardupilot/venv/bin/pip install --no-cache-dir pymavlink dronekit dronekit-sitl pexpect future pyqt5 empy==3.3.4
+
 ENV PATH="/home/ardupilot/venv/bin:${PATH}"
 
 COPY --chown=ardupilot:ardupilot entrypoint.sh start_sitl.sh /home/ardupilot/
