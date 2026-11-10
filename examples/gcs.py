@@ -9,9 +9,9 @@ if sys.version_info >= (3, 10):
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLineEdit,
-    QVBoxLayout, QLabel, QMessageBox, QGridLayout, QHBoxLayout
+    QVBoxLayout, QLabel, QMessageBox, QGridLayout, QHBoxLayout, QProgressBar
 )
-from PyQt5.QtCore import QRunnable, QThreadPool, QTimer
+from PyQt5.QtCore import QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt5.QtCore import Qt
 class Worker(QRunnable):
     def __init__(self, fn):
@@ -24,6 +24,9 @@ class Worker(QRunnable):
 from dronekit import VehicleMode, connect
 
 class GCS(QWidget):
+    arm_status_signal = pyqtSignal(bool)
+    rc_ui_signal = pyqtSignal(int, int, int, int)
+
     def __init__(self, parent=None):
         super().__init__()
 
@@ -49,7 +52,7 @@ class GCS(QWidget):
         self.vehicle = None
         self.is_called = False
         self.setWindowTitle("Ground control station")
-        self.resize(500, 150)
+        self.resize(500, 300)
         self.connection_dst = QLineEdit("127.0.0.1:14550")
         self.connect_button = QPushButton("Connect")
         self.disconnect_button = QPushButton("Disconnect")
@@ -62,14 +65,34 @@ class GCS(QWidget):
         self.takeoff_input = QLineEdit("15")
         self.takeoff_button = QPushButton("Takeoff")
 
+        self.bar_roll = QProgressBar()
+        self.bar_roll.setRange(1000, 2000)
+        self.bar_roll.setValue(1500)
+        self.bar_pitch = QProgressBar()
+        self.bar_pitch.setRange(1000, 2000)
+        self.bar_pitch.setValue(1500)
+        self.bar_throttle = QProgressBar()
+        self.bar_throttle.setRange(1000, 2000)
+        self.bar_throttle.setValue(1000)
+        self.bar_yaw = QProgressBar()
+        self.bar_yaw.setRange(1000, 2000)
+        self.bar_yaw.setValue(1500)
+
+        for w in [self.connect_button, self.disconnect_button, self.arm_button,
+                  self.guided_button, self.stabilize_button, self.loiter_button,
+                  self.land_button, self.rtl_button, self.takeoff_button,
+                  self.connection_dst, self.takeoff_input, self.bar_roll,
+                  self.bar_pitch, self.bar_throttle, self.bar_yaw]:
+            w.setFocusPolicy(Qt.NoFocus)
 
         main_layout = QGridLayout(self)
-        layout1 = QHBoxLayout(self)
-        layout2 = QGridLayout(self)
+        layout1 = QHBoxLayout()
+        layout2 = QGridLayout()
         layout1.addWidget(self.connect_button)
         layout1.addWidget(self.disconnect_button)
         main_layout.addLayout(layout1, 0, 0)
         main_layout.addWidget(self.connection_dst, 1, 0)
+
         layout2.addWidget(self.guided_button, 0, 0)
         layout2.addWidget(self.arm_button, 1, 0)
         layout2.addWidget(self.stabilize_button, 2, 0)
@@ -77,10 +100,22 @@ class GCS(QWidget):
         layout2.addWidget(self.land_button, 1, 1)
         layout2.addWidget(self.rtl_button, 2, 1)
         main_layout.addLayout(layout2, 2, 0)
-        layout3 = QHBoxLayout(self)
+
+        layout3 = QHBoxLayout()
         layout3.addWidget(self.takeoff_button)
         layout3.addWidget(self.takeoff_input)
         main_layout.addLayout(layout3, 3, 0)
+
+        bars_layout = QGridLayout()
+        bars_layout.addWidget(QLabel("Roll"), 0, 0)
+        bars_layout.addWidget(self.bar_roll, 0, 1)
+        bars_layout.addWidget(QLabel("Pitch"), 1, 0)
+        bars_layout.addWidget(self.bar_pitch, 1, 1)
+        bars_layout.addWidget(QLabel("Throttle"), 2, 0)
+        bars_layout.addWidget(self.bar_throttle, 2, 1)
+        bars_layout.addWidget(QLabel("Yaw"), 3, 0)
+        bars_layout.addWidget(self.bar_yaw, 3, 1)
+        main_layout.addLayout(bars_layout, 4, 0)
 
         self.connect_button.clicked.connect(lambda: self.run_async(self.connect_drone))
         self.disconnect_button.clicked.connect(lambda: self.run_async(self.disconnect_drone))
@@ -94,10 +129,10 @@ class GCS(QWidget):
         self.takeoff_button.clicked.connect(lambda: self.run_async(self.arm_and_takeoff))
 
         self.status_label = QLabel("Disconnected")
-        main_layout.addWidget(self.status_label, 4, 0)
+        main_layout.addWidget(self.status_label, 5, 0)
 
-        # self.run_async(self.connect_drone)
-
+        self.arm_status_signal.connect(self.update_arm_button_ui)
+        self.rc_ui_signal.connect(self.update_bars_ui)
 
     def run_async(self, fn):
         self.thread_pool.start(Worker(fn))
@@ -107,12 +142,14 @@ class GCS(QWidget):
         self.connect_button.setDisabled(True)
         self.connection_dst.setDisabled(True)
         print(f"connecting to drone at {self.connection_dst.text()}")
-        self.vehicle = connect(self.connection_dst.text(), wait_ready=True)
-        if self.vehicle:
-            print("Connected")
-            self.vehicle.add_attribute_listener('armed', self.armed_callback)
+        try:
+            self.vehicle = connect(self.connection_dst.text(), wait_ready=True)
+            if self.vehicle:
+                print("Connected")
+                self.vehicle.add_attribute_listener('armed', self.armed_callback)
+        except Exception as e:
+            print(f"Connection failed: {e}")
         self.is_called = False
-
 
     def disconnect_drone(self):
         if self.vehicle is None:
@@ -127,8 +164,8 @@ class GCS(QWidget):
             self.connect_button.setDisabled(True)
             self.connection_dst.setDisabled(True)
             if self.vehicle:
-                self.status_label.setText(f"Connected | mode: {self.vehicle.mode.name} | altitude: {self.vehicle.location.global_relative_frame.alt}\n"
-                                      f"{self.vehicle.channels.overrides}".replace("'1'",'r').replace("'2'",'p').replace("'3'",'t').replace("'4'",'y'))
+                self.status_label.setText(
+                    f"Connected | mode: {self.vehicle.mode.name} | altitude: {self.vehicle.location.global_relative_frame.alt}")
         else:
             self.connect_button.setEnabled(True)
             self.connection_dst.setEnabled(True)
@@ -136,17 +173,25 @@ class GCS(QWidget):
             self.status_label.setText("Disconnected")
             return
 
-
-
     def armed_callback(self, vehicle, attribute_name, value):
+        self.arm_status_signal.emit(value)
+
+    def update_arm_button_ui(self, value):
         if value:
             self.arm_button.setText("Disarm")
         else:
             self.arm_button.setText("Arm")
 
+    def update_bars_ui(self, r, p, t, y):
+        self.bar_roll.setValue(r)
+        self.bar_pitch.setValue(p)
+        self.bar_throttle.setValue(t)
+        self.bar_yaw.setValue(y)
+
     def change_mode(self, mode):
         if self.vehicle is None:
             return
+        self.takeoff_input.setDisabled(mode in ("STABILIZE", "LOITER"))
         print('changing mode to ' + mode)
         self.vehicle.mode = VehicleMode(mode)
         time.sleep(1)
@@ -181,61 +226,75 @@ class GCS(QWidget):
     def keyPressEvent(self, event):
         if not event.isAutoRepeat():
             self.pressed_keys.add(event.key())
+        event.ignore()
 
     def keyReleaseEvent(self, event):
         if not event.isAutoRepeat():
             self.pressed_keys.discard(event.key())
+        event.ignore()
 
     def update_rc(self):
-        if not self.vehicle:
-            return
+        step = 25
 
-        step = 50
-
-        # Roll
-        self.rc[1] = 1500
         if Qt.Key_Left in self.pressed_keys:
-            self.rc[1] += step
-        if Qt.Key_Right in self.pressed_keys:
-            self.rc[1] -= step
+            self.rc[1] = min(2000, self.rc[1] + step)
+        elif Qt.Key_Right in self.pressed_keys:
+            self.rc[1] = max(1000, self.rc[1] - step)
+        else:
+            if self.rc[1] > 1500:
+                self.rc[1] = max(1500, self.rc[1] - step)
+            elif self.rc[1] < 1500:
+                self.rc[1] = min(1500, self.rc[1] + step)
 
-        # Pitch
-        self.rc[2] = 1500
         if Qt.Key_Up in self.pressed_keys:
-            self.rc[2] += step
-        if Qt.Key_Down in self.pressed_keys:
-            self.rc[2] -= step
+            self.rc[2] = min(2000, self.rc[2] + step)
+        elif Qt.Key_Down in self.pressed_keys:
+            self.rc[2] = max(1000, self.rc[2] - step)
+        else:
+            if self.rc[2] > 1500:
+                self.rc[2] = max(1500, self.rc[2] - step)
+            elif self.rc[2] < 1500:
+                self.rc[2] = min(1500, self.rc[2] + step)
 
-        # Throttle
         if Qt.Key_W in self.pressed_keys:
             self.rc[3] = min(2000, self.rc[3] + 30)
         elif Qt.Key_S in self.pressed_keys:
             self.rc[3] = max(1000, self.rc[3] - 30)
 
-        # Yaw
-        self.rc[4] = 1500
         if Qt.Key_A in self.pressed_keys:
-            self.rc[4] -= step
-        if Qt.Key_D in self.pressed_keys:
-            self.rc[4] += step
+            self.rc[4] = max(1000, self.rc[4] - step)
+        elif Qt.Key_D in self.pressed_keys:
+            self.rc[4] = min(2000, self.rc[4] + step)
+        else:
+            if self.rc[4] > 1500:
+                self.rc[4] = max(1500, self.rc[4] - step)
+            elif self.rc[4] < 1500:
+                self.rc[4] = min(1500, self.rc[4] + step)
 
-        # Send RC overrides
-        self.vehicle.channels.overrides = {
-            str(ch): value for ch, value in self.rc.items()
-        }
+        if self.vehicle:
+            try:
+                self.vehicle.channels.overrides = {
+                    str(ch): value for ch, value in self.rc.items()
+                }
+            except Exception:
+                pass
+
+        self.rc_ui_signal.emit(self.rc[1], self.rc[2], self.rc[3], self.rc[4])
 
     def focusOutEvent(self, event):
-        if self.vehicle is None:
-            return
         self.pressed_keys.clear()
         self.rc[1] = 1500
         self.rc[2] = 1500
-        self.rc[3] = 1000
         self.rc[4] = 1500
-        self.vehicle.channels.overrides = {
-            str(ch): value for ch, value in self.rc.items()
-        }
-        # super().focusOutEvent(event)
+        if self.vehicle:
+            try:
+                self.vehicle.channels.overrides = {
+                    str(ch): value for ch, value in self.rc.items()
+                }
+            except Exception:
+                pass
+        self.rc_ui_signal.emit(self.rc[1], self.rc[2], self.rc[3], self.rc[4])
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
